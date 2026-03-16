@@ -1,61 +1,138 @@
-#!/bin/bash
+#!/usr/bin/env python3
 
-echo "================================="
-echo " Instalando Linux EDR Agent"
-echo "================================="
+import subprocess
+import time
+import psutil
+from datetime import datetime
 
-# atualizar pacotes
+LOG_FILE = "/var/log/edr_agent.log"
 
-sudo apt update -y
+# portas consideradas sensíveis
+BLOCKED_PORTS = [23, 21, 80]
+ALLOWED_PORTS = [22]
 
-# instalar dependências
+# -------------------------
+# FUNÇÃO DE LOG
+# -------------------------
 
-sudo apt install python3 python3-pip ufw curl -y
+def log(message):
+    with open(LOG_FILE, "a") as f:
+        f.write(f"[{datetime.now()}] {message}\n")
 
-# instalar biblioteca python
+# -------------------------
+# CONFIGURAÇÃO FIREWALL
+# -------------------------
 
-pip3 install psutil
+def configure_firewall():
 
-# criar diretório do agente
+    log("Configurando firewall...")
 
-sudo mkdir -p /opt/edr-agent
+    subprocess.run(["ufw", "--force", "enable"])
 
-# baixar agente do github
+    for port in BLOCKED_PORTS:
+        subprocess.run(["ufw", "deny", str(port)])
+        log(f"Porta bloqueada: {port}")
 
-sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/refs/heads/main/edr.agent.py?token=GHSAT0AAAAAADX4KNECJ5OTH2T7VM6VMTIK2NXCJPA
+    for port in ALLOWED_PORTS:
+        subprocess.run(["ufw", "allow", str(port)])
+        log(f"Porta permitida: {port}")
 
-# dar permissão de execução
+# -------------------------
+# POLÍTICAS SSH
+# -------------------------
 
-sudo chmod +x /opt/edr-agent/edr_agent.py
+def configure_ssh():
 
-# criar arquivo de log
+    ssh_config = "/etc/ssh/sshd_config"
 
-sudo touch /var/log/edr_agent.log
-sudo chmod 666 /var/log/edr_agent.log
+    log("Aplicando políticas SSH")
 
-# criar serviço systemd
+    with open(ssh_config, "a") as f:
+        f.write("\nMaxAuthTries 3\n")
+        f.write("PermitRootLogin no\n")
 
-sudo bash -c 'cat << EOF > /etc/systemd/system/edr-agent.service
-[Unit]
-Description=Linux EDR Agent
-After=network.target
+    subprocess.run(["systemctl", "restart", "ssh"])
 
-[Service]
-ExecStart=/usr/bin/python3 /opt/edr-agent/edr_agent.py
-Restart=always
-User=root
+# -------------------------
+# MONITORAMENTO DE PORTAS
+# -------------------------
 
-[Install]
-WantedBy=multi-user.target
-EOF'
+def monitor_ports():
 
-# ativar serviço
+    connections = psutil.net_connections()
 
-sudo systemctl daemon-reload
-sudo systemctl enable edr-agent
-sudo systemctl start edr-agent
+    for conn in connections:
 
-echo "================================="
-echo "Instalação concluída!"
-echo "EDR ativo no sistema."
-echo "================================="
+        if conn.status == "LISTEN":
+
+            port = conn.laddr.port
+
+            if port in BLOCKED_PORTS:
+                log(f"ALERTA: Porta sensível aberta -> {port}")
+
+# -------------------------
+# DETECÇÃO DE CONEXÕES SUSPEITAS
+# -------------------------
+
+def detect_network_anomaly():
+
+    connections = psutil.net_connections(kind="inet")
+
+    ip_count = {}
+
+    for conn in connections:
+
+        if conn.raddr:
+
+            ip = conn.raddr.ip
+            ip_count[ip] = ip_count.get(ip, 0) + 1
+
+    for ip, count in ip_count.items():
+
+        if count > 40:
+            log(f"Possível scan ou ataque detectado de {ip} ({count} conexões)")
+
+# -------------------------
+# DETECÇÃO DE PROCESSOS SUSPEITOS
+# -------------------------
+
+def monitor_processes():
+
+    suspicious_processes = ["nmap", "hydra", "netcat", "nc"]
+
+    for proc in psutil.process_iter(['name']):
+
+        try:
+
+            if proc.info['name'] in suspicious_processes:
+                log(f"Processo suspeito detectado: {proc.info['name']}")
+
+        except:
+            pass
+
+# -------------------------
+# LOOP PRINCIPAL
+# -------------------------
+
+def edr_loop():
+
+    log("EDR iniciado")
+
+    while True:
+
+        monitor_ports()
+        detect_network_anomaly()
+        monitor_processes()
+
+        time.sleep(300)
+
+# -------------------------
+# MAIN
+# -------------------------
+
+if __name__ == "__main__":
+
+    configure_firewall()
+    configure_ssh()
+
+    edr_loop()
