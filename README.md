@@ -7,4 +7,5 @@ A máquina atual testada já foi configurada para suportar o programa e conta co
 fornecido neste repositório. 
 Testei apenas comando básicos de Nmap para realizar algum teste e analisar o arquivo de log gerado pelo EDR porém não tive sucesso até o momento. Estou me programando para criar uma máquina Kali que sirva como um atacante em sandbox para realizar o ataque. 
 
-Comando para instaldor: sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/edr_agent.py
+Comando para instaldor: sudo curl -o /opt/edr-agent/edr_agent.py \
+https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/edr.agent.py
