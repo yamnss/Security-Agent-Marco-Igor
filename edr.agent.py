@@ -124,7 +124,7 @@ def edr_loop():
         detect_network_anomaly()
         monitor_processes()
 
-        time.sleep(300)
+        time.sleep(10)
 
 # -------------------------
 # MAIN
