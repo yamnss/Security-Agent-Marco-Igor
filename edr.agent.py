@@ -75,22 +75,17 @@ def monitor_ports():
 # -------------------------
 
 def detect_network_anomaly():
-
     connections = psutil.net_connections(kind="inet")
-
     ip_count = {}
 
     for conn in connections:
-
         if conn.raddr:
-
             ip = conn.raddr.ip
             ip_count[ip] = ip_count.get(ip, 0) + 1
 
     for ip, count in ip_count.items():
-
-        if count > 40:
-            log(f"Possível scan ou ataque detectado de {ip} ({count} conexões)")
+        if count > 5:  # bem mais sensível
+            log(f"ALERTA: Possível ataque de {ip} ({count} conexões simultâneas)")
 
 # -------------------------
 # DETECÇÃO DE PROCESSOS SUSPEITOS
@@ -124,7 +119,7 @@ def edr_loop():
         detect_network_anomaly()
         monitor_processes()
 
-        time.sleep(10)
+        time.sleep(5)
 
 # -------------------------
 # MAIN
