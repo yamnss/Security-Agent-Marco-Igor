@@ -6,3 +6,4 @@ Tenha cuidado ao instalar esse EDR sem verificar o Sources.list no Ubuntu. Testa
 A máquina atual testada já foi configurada para suportar o programa e conta com comandos simples instalados como o snap e o curl, além dos que são necessários para o funcionamento do agente mas esses são instalados a parte pelo próprio instalador
 fornecido neste repositório.
 
+Comando para instaldor: sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/edr_agent.py
