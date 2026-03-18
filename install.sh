@@ -26,7 +26,7 @@ sudo chmod 666 /var/log/edr_agent.log
 # =========================
 echo "[+] Baixando agent..."
 
-sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPO/main/edr_agent.py
+sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/edr_agent.py
 
 sudo chmod +x /opt/edr-agent/edr_agent.py
 
