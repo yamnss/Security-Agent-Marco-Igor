@@ -1,32 +1,41 @@
 #!/bin/bash
 
-echo "Instalando Linux EDR Agent..."
+set -e
 
-# atualizar sistema
-sudo apt update
+echo "[+] Instalando EDR Agent..."
 
-# instalar dependências
-sudo apt install -y python3 python3-psutil ufw curl
+# =========================
+# DEPENDÊNCIAS
+# =========================
+sudo apt update -y
+sudo apt install -y ufw conntrack net-tools openssh-server python3
 
-# instalar SSH se não existir
-if ! command -v sshd &> /dev/null
-then
-    echo "Instalando OpenSSH Server..."
-    sudo apt install -y openssh-server
-fi
-
-# criar diretório do agente
+# =========================
+# ESTRUTURA
+# =========================
 sudo mkdir -p /opt/edr-agent
 
-# baixar agente
-sudo curl -o /opt/edr-agent/edr_agent.py \
-https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/edr.agent.py
+# =========================
+# LOG
+# =========================
+sudo touch /var/log/edr_agent.log
+sudo chmod 666 /var/log/edr_agent.log
 
-# permissões
+# =========================
+# BAIXAR AGENT (do próprio repo)
+# =========================
+echo "[+] Baixando agent..."
+
+sudo curl -o /opt/edr-agent/edr_agent.py https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPO/main/edr_agent.py
+
 sudo chmod +x /opt/edr-agent/edr_agent.py
 
-# criar arquivo de serviço
-sudo tee /etc/systemd/system/edr-agent.service > /dev/null <<EOF
+# =========================
+# SERVICE
+# =========================
+echo "[+] Criando serviço..."
+
+sudo tee /etc/systemd/system/edr-agent.service > /dev/null << EOF
 [Unit]
 Description=Linux EDR Agent
 After=network.target
@@ -40,13 +49,17 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# recarregar systemd
+# =========================
+# START
+# =========================
 sudo systemctl daemon-reload
-
-# habilitar serviço
 sudo systemctl enable edr-agent
+sudo systemctl restart edr-agent
 
-# iniciar agente
-sudo systemctl start edr-agent
+# =========================
+# FIREWALL
+# =========================
+sudo ufw --force enable
 
-echo "EDR instalado com sucesso!"
+echo "[✔] EDR instalado com sucesso!"
+sudo systemctl status edr-agent --no-pager
