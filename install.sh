@@ -3,8 +3,6 @@ set -u
 
 REPO_USER="yamnss"
 REPO_NAME="Security-Agent-Marco-Igor"
-
-# 🔥 CORRIGIDO AQUI
 AGENT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/edr.agent.py"
 
 INSTALL_DIR="/opt/edr-agent"
@@ -22,31 +20,21 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERRO]${NC} $1"; }
 die() { error "$1"; exit 1; }
 
-# -------------------------
-# ROOT CHECK
-# -------------------------
 if [ "$EUID" -ne 0 ]; then
   die "Execute como root: sudo bash install.sh"
 fi
 
-# -------------------------
-# APT LOCK
-# -------------------------
 info "Verificando travas do apt..."
-while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+   || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+   || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
   warn "Aguardando apt..."
   sleep 5
 done
 
-# -------------------------
-# DETECTAR CODENAME
-# -------------------------
 CODENAME=$(lsb_release -cs 2>/dev/null || echo "unknown")
 info "Codename detectado: $CODENAME"
 
-# -------------------------
-# CORRIGIR EOL
-# -------------------------
 case "$CODENAME" in
   oracular|mantic|lunar|kinetic|impish|hirsute|groovy)
     warn "Versão EOL detectada, corrigindo repositórios..."
@@ -62,15 +50,9 @@ EOF
     ;;
 esac
 
-# -------------------------
-# UPDATE
-# -------------------------
 info "Atualizando APT..."
 apt-get update -y || die "Erro no apt update"
 
-# -------------------------
-# INSTALL DEPENDENCIAS
-# -------------------------
 info "Instalando dependências..."
 apt-get install -y \
   curl \
@@ -81,47 +63,36 @@ apt-get install -y \
   python3-psutil \
   net-tools || die "Erro ao instalar pacotes"
 
-# -------------------------
-# VALIDAR BINARIOS
-# -------------------------
 command -v python3 >/dev/null || die "python3 não encontrado"
 command -v ufw >/dev/null || die "ufw não encontrado"
 command -v conntrack >/dev/null || die "conntrack não encontrado"
+command -v curl >/dev/null || die "curl não encontrado"
 
-# -------------------------
-# CRIAR ESTRUTURA
-# -------------------------
 info "Criando estrutura..."
-mkdir -p $INSTALL_DIR
+mkdir -p "$INSTALL_DIR" || die "Falha ao criar $INSTALL_DIR"
 
-touch $LOG_FILE
-chmod 666 $LOG_FILE
+touch "$LOG_FILE" || die "Falha ao criar $LOG_FILE"
+chown root:root "$LOG_FILE"
+chmod 644 "$LOG_FILE"
 
-# -------------------------
-# BAIXAR AGENTE
-# -------------------------
 info "Baixando agente..."
+curl -fsSL "$AGENT_URL" -o "$AGENT_FILE" || die "Erro ao baixar agente"
 
-curl -fsSL $AGENT_URL -o $AGENT_FILE || die "Erro ao baixar agente"
+if [ ! -s "$AGENT_FILE" ]; then
+  die "Arquivo do agente veio vazio"
+fi
 
-if grep -q "404: Not Found" $AGENT_FILE; then
+if grep -q "404: Not Found" "$AGENT_FILE"; then
   die "Arquivo inválido (404)"
 fi
 
-chmod +x $AGENT_FILE
+chmod +x "$AGENT_FILE"
 
-# -------------------------
-# VALIDAR PYTHON
-# -------------------------
 info "Validando código..."
-python3 -m py_compile $AGENT_FILE || die "Erro de sintaxe no agente"
+python3 -m py_compile "$AGENT_FILE" || die "Erro de sintaxe no agente"
 
-# -------------------------
-# CRIAR SERVICE
-# -------------------------
 info "Criando serviço..."
-
-cat > $SERVICE_FILE <<EOF
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Linux EDR Agent
 After=network.target
@@ -135,9 +106,6 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# -------------------------
-# ATIVAR SERVIÇOS
-# -------------------------
 systemctl daemon-reload
 
 systemctl enable ssh >/dev/null 2>&1
@@ -148,9 +116,6 @@ ufw --force enable >/dev/null 2>&1
 systemctl enable edr-agent || die "Erro ao habilitar serviço"
 systemctl restart edr-agent || die "Erro ao iniciar serviço"
 
-# -------------------------
-# FINAL
-# -------------------------
 info "Instalação concluída 🚀"
 echo ""
 echo "Log:"
