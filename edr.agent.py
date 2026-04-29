@@ -2,13 +2,15 @@
 
 import os
 import re
-import subprocess
+import json
 import time
+import psutil
+import urllib.request
+import subprocess
 from datetime import datetime
 
-import psutil
-
 LOG_FILE = "/var/log/edr_agent.log"
+STATS_FILE = "/var/log/edr_stats.log"
 SSH_CONFIG = "/etc/ssh/sshd_config"
 AUTH_LOG = "/var/log/auth.log"
 UFW_LOG = "/var/log/ufw.log"
@@ -17,92 +19,175 @@ BLOCKED_PORTS = [23, 21, 80]
 ALLOWED_PORTS = [22]
 
 CHECK_INTERVAL = 5
-EVENT_COOLDOWN = 30          # segundos para repetir log do mesmo evento
-SCAN_WINDOW = 30             # janela para contar tentativas de scan
-SCAN_THRESHOLD = 5           # tentativas bloqueadas no ufw para alertar
-SSH_FAIL_WINDOW = 300        # janela para contar falhas de ssh (5 min)
-SSH_FAIL_THRESHOLD = 3       # 3 senhas erradas = bloqueio
 
-# estado em memória
+SSH_MEDIUM_THRESHOLD = 3
+SSH_HIGH_THRESHOLD = 6
+SSH_FAIL_WINDOW = 300
+
+SCAN_THRESHOLD = 5
+SCAN_WINDOW = 30
+
+EVENT_COOLDOWN = 30
+
+# ALTERE AQUI
+WHITELIST_IPS = [
+    "192.168.18.1",
+]
+
+# ALTERE AQUI
+ENABLE_GEOLOCATION = True
+ALLOWED_COUNTRIES = ["BR"]
+
 last_auth_position = 0
 last_ufw_position = 0
 
-last_event_log = {}          # chave -> timestamp do último log
-ssh_failures = {}            # ip -> [timestamps]
-scan_attempts = {}           # ip -> [timestamps]
+last_event_log = {}
+ssh_failures = {}
+scan_attempts = {}
+blocked_ips = set()
+
+stats = {
+    "LOW": 0,
+    "MEDIUM": 0,
+    "HIGH": 0,
+    "BLOCKED": 0,
+    "SSH_FAILURES": 0,
+    "SCANS": 0,
+    "SSH_CONNECTIONS": 0,
+}
 
 
-# -------------------------
-# LOG
-# -------------------------
-def log(message: str) -> None:
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def log(message):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {message}\n")
+        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
         f.flush()
 
 
-def log_with_cooldown(event_key: str, message: str, cooldown: int = EVENT_COOLDOWN) -> None:
+def save_stats():
+    data = {
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "stats": stats
+    }
+
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def log_event(level, message):
+    if level in stats:
+        stats[level] += 1
+
+    log(f"[{level}] {message}")
+    save_stats()
+
+
+def log_with_cooldown(event_key, level, message, cooldown=EVENT_COOLDOWN):
     now = time.time()
     last = last_event_log.get(event_key, 0)
 
     if now - last >= cooldown:
-        log(message)
+        log_event(level, message)
         last_event_log[event_key] = now
 
 
-# -------------------------
-# SAFE RUN
-# -------------------------
-def safe_run(cmd: list[str]) -> None:
+def safe_run(cmd):
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except Exception as e:
-        log(f"[ERRO] comando falhou {' '.join(cmd)}: {e}")
+        log_event("LOW", f"Falha ao executar comando {' '.join(cmd)}: {e}")
 
 
-def safe_run_output(cmd: list[str]) -> str:
+def safe_run_output(cmd):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return result.stdout or ""
     except Exception as e:
-        log(f"[ERRO] saída do comando falhou {' '.join(cmd)}: {e}")
+        log_event("LOW", f"Falha ao obter saída do comando {' '.join(cmd)}: {e}")
         return ""
 
 
-# -------------------------
-# HELPERS FIREWALL
-# -------------------------
-def ufw_rule_exists(ip: str, port: int | None = None) -> bool:
-    status = safe_run_output(["ufw", "status"])
-    if not status:
+def is_private_ip(ip):
+    return (
+        ip.startswith("10.") or
+        ip.startswith("192.168.") or
+        ip.startswith("172.16.") or
+        ip.startswith("172.17.") or
+        ip.startswith("172.18.") or
+        ip.startswith("172.19.") or
+        ip.startswith("172.20.") or
+        ip.startswith("172.21.") or
+        ip.startswith("172.22.") or
+        ip.startswith("172.23.") or
+        ip.startswith("172.24.") or
+        ip.startswith("172.25.") or
+        ip.startswith("172.26.") or
+        ip.startswith("172.27.") or
+        ip.startswith("172.28.") or
+        ip.startswith("172.29.") or
+        ip.startswith("172.30.") or
+        ip.startswith("172.31.") or
+        ip.startswith("127.")
+    )
+
+
+def get_country(ip):
+    if is_private_ip(ip):
+        return "PRIVATE"
+
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,countryCode"
+        with urllib.request.urlopen(url, timeout=2) as response:
+            data = json.loads(response.read().decode())
+
+        if data.get("status") == "success":
+            return data.get("countryCode", "UNKNOWN")
+
+    except Exception:
+        return "UNKNOWN"
+
+    return "UNKNOWN"
+
+
+def is_whitelisted(ip):
+    return ip in WHITELIST_IPS
+
+
+def check_geo_policy(ip):
+    if not ENABLE_GEOLOCATION:
+        return True
+
+    if is_private_ip(ip):
+        return True
+
+    country = get_country(ip)
+
+    if country not in ALLOWED_COUNTRIES:
+        log_event("HIGH", f"IP fora da região permitida: {ip} país={country}")
+        block_ip(ip, "geolocalização não permitida")
         return False
 
+    return True
+
+
+def ufw_rule_exists(ip, port=None):
+    status = safe_run_output(["ufw", "status"])
+
     if port is None:
-        patterns = [
-            f"DENY IN {ip}",
-            f"DENY       {ip}",
-            f"DENY IN    {ip}",
-        ]
-    else:
-        patterns = [
-            f"{port} DENY IN {ip}",
-            f"{port}/tcp DENY IN {ip}",
-            f"{port}                         DENY IN    {ip}",
-            f"{port}/tcp                     DENY IN    {ip}",
-            f"DENY IN    {ip}",
-        ]
+        return ip in status
 
-    return any(p in status for p in patterns)
+    return ip in status and str(port) in status
 
 
-def block_ip(ip: str, reason: str, port: int | None = None) -> None:
+def block_ip(ip, reason, port=None):
+    if is_whitelisted(ip):
+        log_event("LOW", f"IP em whitelist, bloqueio ignorado: {ip}")
+        return
+
+    if ip in blocked_ips:
+        return
+
     if ufw_rule_exists(ip, port):
-        log_with_cooldown(
-            f"rule-exists:{ip}:{port}",
-            f"[INFO] Regra já existente para {ip}" + (f" na porta {port}" if port else ""),
-            cooldown=60
-        )
+        blocked_ips.add(ip)
         return
 
     if port is None:
@@ -110,38 +195,30 @@ def block_ip(ip: str, reason: str, port: int | None = None) -> None:
     else:
         safe_run(["ufw", "insert", "1", "deny", "from", ip, "to", "any", "port", str(port)])
 
-    # tenta derrubar conexões já existentes
     safe_run(["conntrack", "-D", "-s", ip])
 
-    log(f"[ACTION] IP bloqueado: {ip} | motivo: {reason}" + (f" | porta: {port}" if port else ""))
+    blocked_ips.add(ip)
+    stats["BLOCKED"] += 1
+
+    log_event("HIGH", f"IP bloqueado: {ip} | motivo={reason}" + (f" | porta={port}" if port else ""))
 
 
-# -------------------------
-# FIREWALL
-# -------------------------
-def configure_firewall() -> None:
-    log("[STARTUP] Configurando firewall")
+def configure_firewall():
+    log_event("LOW", "Configurando firewall")
 
     safe_run(["ufw", "--force", "enable"])
     safe_run(["ufw", "logging", "on"])
 
-    current_status = safe_run_output(["ufw", "status"])
-
     for port in BLOCKED_PORTS:
-        if f"{port}" not in current_status:
-            safe_run(["ufw", "deny", str(port)])
-        log_with_cooldown(f"fw-block:{port}", f"[INFO] Porta bloqueada: {port}", cooldown=3600)
+        safe_run(["ufw", "deny", str(port)])
+        log_with_cooldown(f"fw-block-{port}", "LOW", f"Porta bloqueada: {port}", cooldown=3600)
 
     for port in ALLOWED_PORTS:
-        if f"{port}" not in current_status:
-            safe_run(["ufw", "allow", str(port)])
-        log_with_cooldown(f"fw-allow:{port}", f"[INFO] Porta permitida: {port}", cooldown=3600)
+        safe_run(["ufw", "allow", str(port)])
+        log_with_cooldown(f"fw-allow-{port}", "LOW", f"Porta permitida: {port}", cooldown=3600)
 
 
-# -------------------------
-# SSH HARDENING
-# -------------------------
-def ensure_sshd_option(content: str, key: str, value: str) -> str:
+def ensure_sshd_option(content, key, value):
     pattern = re.compile(rf"^\s*#?\s*{re.escape(key)}\s+.*$", re.MULTILINE)
 
     if pattern.search(content):
@@ -153,12 +230,10 @@ def ensure_sshd_option(content: str, key: str, value: str) -> str:
     return content + f"{key} {value}\n"
 
 
-def configure_ssh() -> None:
+def configure_ssh():
     if not os.path.exists(SSH_CONFIG):
-        log("[WARNING] sshd_config não encontrado; pulando hardening SSH")
+        log_event("MEDIUM", "sshd_config não encontrado; hardening SSH ignorado")
         return
-
-    log("[STARTUP] Aplicando políticas SSH")
 
     try:
         with open(SSH_CONFIG, "r", encoding="utf-8") as f:
@@ -170,18 +245,16 @@ def configure_ssh() -> None:
         if updated != content:
             with open(SSH_CONFIG, "w", encoding="utf-8") as f:
                 f.write(updated)
-            log("[INFO] Configurações SSH atualizadas")
+
+            log_event("LOW", "Configurações SSH atualizadas")
 
         safe_run(["systemctl", "restart", "ssh"])
 
     except Exception as e:
-        log(f"[ERRO] configure_ssh: {e}")
+        log_event("MEDIUM", f"Erro ao configurar SSH: {e}")
 
 
-# -------------------------
-# MONITORAMENTO DE PORTAS
-# -------------------------
-def monitor_ports() -> None:
+def monitor_ports():
     try:
         connections = psutil.net_connections(kind="inet")
 
@@ -195,35 +268,33 @@ def monitor_ports() -> None:
             local_port = conn.laddr.port
             remote_ip = conn.raddr.ip
 
-            # Loga conexões SSH, mas com cooldown por IP
+            if is_whitelisted(remote_ip):
+                continue
+
+            check_geo_policy(remote_ip)
+
             if local_port == 22:
+                stats["SSH_CONNECTIONS"] += 1
                 log_with_cooldown(
-                    event_key=f"ssh-conn:{remote_ip}",
-                    message=f"[INFO] Conexão SSH detectada de {remote_ip}",
+                    f"ssh-conn-{remote_ip}",
+                    "LOW",
+                    f"Conexão SSH detectada de {remote_ip}",
                     cooldown=15
                 )
 
-            # Se alguém conseguir atingir uma porta sensível, loga e bloqueia
             if local_port in BLOCKED_PORTS:
-                log_with_cooldown(
-                    event_key=f"blocked-port:{remote_ip}:{local_port}",
-                    message=f"[CRITICAL] Acesso proibido: {remote_ip} -> porta {local_port}",
-                    cooldown=10
-                )
-                block_ip(remote_ip, reason="acesso a porta sensível", port=local_port)
+                log_event("HIGH", f"Acesso proibido: {remote_ip} -> porta {local_port}")
+                block_ip(remote_ip, "acesso a porta sensível", port=local_port)
 
     except Exception as e:
-        log(f"[ERRO] monitor_ports: {e}")
+        log_event("LOW", f"Erro em monitor_ports: {e}")
 
 
-# -------------------------
-# DETECÇÃO DE SCAN
-# -------------------------
-def detect_network_anomaly() -> None:
+def detect_network_anomaly():
     global last_ufw_position
 
     if not os.path.exists(UFW_LOG):
-        log_with_cooldown("ufw-log-missing", f"[WARNING] Arquivo {UFW_LOG} não encontrado", cooldown=300)
+        log_with_cooldown("ufw-log-missing", "MEDIUM", f"Arquivo {UFW_LOG} não encontrado", cooldown=300)
         return
 
     try:
@@ -244,6 +315,11 @@ def detect_network_anomaly() -> None:
 
             ip = match.group(1)
 
+            if is_whitelisted(ip):
+                continue
+
+            check_geo_policy(ip)
+
             if ip not in scan_attempts:
                 scan_attempts[ip] = []
 
@@ -253,24 +329,23 @@ def detect_network_anomaly() -> None:
             count = len(scan_attempts[ip])
 
             if count >= SCAN_THRESHOLD:
+                stats["SCANS"] += 1
                 log_with_cooldown(
-                    event_key=f"scan:{ip}",
-                    message=f"[WARNING] SCAN detectado: {ip} ({count} tentativas em {SCAN_WINDOW}s)",
+                    f"scan-{ip}",
+                    "MEDIUM",
+                    f"SCAN detectado: {ip} ({count} tentativas em {SCAN_WINDOW}s)",
                     cooldown=SCAN_WINDOW
                 )
 
     except Exception as e:
-        log(f"[ERRO] network anomaly: {e}")
+        log_event("LOW", f"Erro em network anomaly: {e}")
 
 
-# -------------------------
-# DETECÇÃO SSH BRUTE FORCE
-# -------------------------
-def detect_ssh_bruteforce() -> None:
+def detect_ssh_bruteforce():
     global last_auth_position
 
     if not os.path.exists(AUTH_LOG):
-        log_with_cooldown("auth-log-missing", f"[WARNING] Arquivo {AUTH_LOG} não encontrado", cooldown=300)
+        log_with_cooldown("auth-log-missing", "MEDIUM", f"Arquivo {AUTH_LOG} não encontrado", cooldown=300)
         return
 
     try:
@@ -291,6 +366,12 @@ def detect_ssh_bruteforce() -> None:
 
             ip = match.group(1)
 
+            if is_whitelisted(ip):
+                log_event("LOW", f"Falha SSH ignorada para IP em whitelist: {ip}")
+                continue
+
+            check_geo_policy(ip)
+
             if ip not in ssh_failures:
                 ssh_failures[ip] = []
 
@@ -298,47 +379,48 @@ def detect_ssh_bruteforce() -> None:
             ssh_failures[ip] = [ts for ts in ssh_failures[ip] if now - ts <= SSH_FAIL_WINDOW]
 
             count = len(ssh_failures[ip])
+            stats["SSH_FAILURES"] += 1
 
-            log_with_cooldown(
-                event_key=f"ssh-fail-log:{ip}",
-                message=f"[INFO] Falhas SSH detectadas de {ip} ({count}/{SSH_FAIL_THRESHOLD})",
-                cooldown=10
-            )
+            if count >= SSH_HIGH_THRESHOLD:
+                log_event("HIGH", f"BRUTE FORCE SSH: {ip} ({count} tentativas em {SSH_FAIL_WINDOW}s)")
+                block_ip(ip, "brute force ssh", port=22)
 
-            if count >= SSH_FAIL_THRESHOLD:
+            elif count >= SSH_MEDIUM_THRESHOLD:
                 log_with_cooldown(
-                    event_key=f"ssh-bruteforce:{ip}",
-                    message=f"[CRITICAL] BRUTE FORCE SSH: {ip} ({count} tentativas em {SSH_FAIL_WINDOW}s)",
-                    cooldown=SSH_FAIL_WINDOW
+                    f"ssh-medium-{ip}",
+                    "MEDIUM",
+                    f"Tentativas SSH suspeitas: {ip} ({count}/{SSH_HIGH_THRESHOLD})",
+                    cooldown=30
                 )
-                block_ip(ip, reason="brute force ssh", port=22)
+
+            else:
+                log_with_cooldown(
+                    f"ssh-low-{ip}",
+                    "LOW",
+                    f"Falha SSH: {ip} ({count}/{SSH_HIGH_THRESHOLD})",
+                    cooldown=10
+                )
 
     except Exception as e:
-        log(f"[ERRO] SSH brute force: {e}")
+        log_event("LOW", f"Erro em SSH brute force: {e}")
 
 
-# -------------------------
-# LOOP PRINCIPAL
-# -------------------------
-def edr_loop() -> None:
-    log("[START] EDR iniciado")
+def edr_loop():
+    log_event("LOW", "EDR iniciado")
 
     while True:
         try:
             monitor_ports()
             detect_network_anomaly()
             detect_ssh_bruteforce()
-
+            save_stats()
             time.sleep(CHECK_INTERVAL)
 
         except Exception as e:
-            log(f"[ERRO LOOP] {e}")
+            log_event("LOW", f"Erro no loop principal: {e}")
             time.sleep(CHECK_INTERVAL)
 
 
-# -------------------------
-# MAIN
-# -------------------------
 if __name__ == "__main__":
     configure_firewall()
     configure_ssh()
