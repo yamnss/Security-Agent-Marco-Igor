@@ -1,0 +1,10 @@
+sqlite3 /opt/edr-agent/edr.db
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT,
+    level TEXT,
+    event_type TEXT,
+    ip TEXT,
+    message TEXT
+);
