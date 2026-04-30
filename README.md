@@ -12,3 +12,7 @@ Torne-se usuário root
 
 
 Feito.
+
+
+Para alterar configurações no agente use o arquivo config.json.
+Use nano /opt/edr-agent/config.json para alterar, salve e sempre reinicie o serviço após quaisquer alterações. 
