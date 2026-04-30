@@ -5,7 +5,7 @@ set -e
 REPO_USER="yamnss"
 REPO_NAME="Security-Agent-Marco-Igor"
 
-AGENT_URL="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/edr_agent.py"
+AGENT_URL="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/edr.agent.py"
 DASHBOARD_URL="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/dashboard.py"
 
 INSTALL_DIR="/opt/edr-agent"
