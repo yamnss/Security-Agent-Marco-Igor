@@ -68,6 +68,7 @@ ssh_attempts = {}
 scan_attempts = {}
 blocked_ips = set()
 last_event_log = {}
+journal_seen_lines = set()
 
 
 def ensure_runtime_files():
@@ -163,7 +164,7 @@ def configure_firewall():
 
     safe_run(["systemctl", "enable", "--now", "rsyslog"])
     safe_run(["ufw", "--force", "enable"])
-    safe_run(["ufw", "logging", "on"])
+    safe_run(["ufw", "logging", "medium"])
 
     for port in ALLOWED_PORTS:
         safe_run(["ufw", "allow", f"{port}/tcp"])
@@ -250,10 +251,11 @@ def block_ip(ip, reason, port=None):
         return
 
     if port:
-        safe_run(["ufw", "insert", "1", "deny", "from", ip, "to", "any", "port", str(port)])
+        safe_run(["ufw", "insert", "1", "deny", "from", ip, "to", "any", "port", str(port), "proto", "tcp"])
     else:
         safe_run(["ufw", "insert", "1", "deny", "from", ip])
 
+    safe_run(["ufw", "reload"])
     safe_run(["conntrack", "-D", "-s", ip])
 
     blocked_ips.add(ip)
@@ -364,58 +366,101 @@ def detect_ssh():
         event("LOW", f"Erro em detect_ssh: {e}", "SYSTEM_ERROR")
 
 
-def detect_scan():
+def read_ufw_log_lines():
     global last_ufw_pos
 
+    lines = []
+
     if not os.path.exists(UFW_LOG):
-        event_cooldown(
-            "ufw-log-missing",
-            "MEDIUM",
-            f"Arquivo {UFW_LOG} não encontrado",
-            "SYSTEM",
-            cooldown=300
-        )
-        return
+        return lines
 
     try:
         with open(UFW_LOG, "r", encoding="utf-8", errors="ignore") as f:
             f.seek(last_ufw_pos)
-            lines = f.readlines()
+            lines.extend(f.readlines())
             last_ufw_pos = f.tell()
+    except Exception as e:
+        event("LOW", f"Erro lendo ufw.log: {e}", "SYSTEM_ERROR")
 
-        now = time.time()
+    return lines
 
-        for line in lines:
-            if "BLOCK" not in line or "SRC=" not in line:
+
+def read_journal_ufw_lines():
+    global journal_seen_lines
+
+    lines = []
+
+    try:
+        result = subprocess.run(
+            ["journalctl", "-k", "--since", "1 minute ago", "--no-pager"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if not result.stdout:
+            return lines
+
+        for line in result.stdout.splitlines():
+            if "UFW BLOCK" not in line:
                 continue
 
-            match = re.search(r"SRC=([0-9\.]+)", line)
-            if not match:
+            line_id = hash(line)
+
+            if line_id in journal_seen_lines:
                 continue
 
-            ip = match.group(1)
+            journal_seen_lines.add(line_id)
+            lines.append(line)
 
-            if is_whitelisted(ip):
-                continue
-
-            scan_attempts.setdefault(ip, [])
-            scan_attempts[ip].append(now)
-            scan_attempts[ip] = [t for t in scan_attempts[ip] if now - t < SCAN_WINDOW]
-
-            count = len(scan_attempts[ip])
-
-            if count >= SCAN_THRESHOLD:
-                event_cooldown(
-                    f"scan-{ip}",
-                    "MEDIUM",
-                    f"Scan detectado {ip} ({count} tentativas em {SCAN_WINDOW}s)",
-                    "PORT_SCAN",
-                    ip,
-                    cooldown=SCAN_WINDOW
-                )
+        if len(journal_seen_lines) > 5000:
+            journal_seen_lines = set(list(journal_seen_lines)[-1000:])
 
     except Exception as e:
-        event("LOW", f"Erro em detect_scan: {e}", "SYSTEM_ERROR")
+        event("LOW", f"Erro lendo journalctl UFW: {e}", "SYSTEM_ERROR")
+
+    return lines
+
+
+def detect_scan():
+    lines = []
+
+    lines.extend(read_ufw_log_lines())
+    lines.extend(read_journal_ufw_lines())
+
+    if not lines:
+        return
+
+    now = time.time()
+
+    for line in lines:
+        if "BLOCK" not in line or "SRC=" not in line:
+            continue
+
+        match = re.search(r"SRC=([0-9\.]+)", line)
+        if not match:
+            continue
+
+        ip = match.group(1)
+
+        if is_whitelisted(ip):
+            continue
+
+        scan_attempts.setdefault(ip, [])
+        scan_attempts[ip].append(now)
+        scan_attempts[ip] = [t for t in scan_attempts[ip] if now - t < SCAN_WINDOW]
+
+        count = len(scan_attempts[ip])
+
+        if count >= SCAN_THRESHOLD:
+            event_cooldown(
+                f"scan-{ip}",
+                "MEDIUM",
+                f"Scan detectado {ip} ({count} tentativas em {SCAN_WINDOW}s)",
+                "PORT_SCAN",
+                ip,
+                cooldown=SCAN_WINDOW
+            )
 
 
 def main():
