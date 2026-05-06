@@ -236,7 +236,7 @@ EOF
 info "Configurando firewall base..."
 
 ufw --force enable
-ufw logging on
+ufw logging medium
 ufw allow 5000/tcp
 
 info "Ativando serviços..."
