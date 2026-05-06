@@ -25,14 +25,8 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERRO]${NC} $1"; exit 1; }
 
-# -------------------------
-# ROOT CHECK
-# -------------------------
 [ "$EUID" -ne 0 ] && error "Execute como root: sudo bash install.sh"
 
-# -------------------------
-# APT LOCK
-# -------------------------
 wait_for_apt() {
   info "Verificando travas do apt/dpkg..."
 
@@ -55,9 +49,6 @@ wait_for_apt() {
 
 wait_for_apt
 
-# -------------------------
-# CORRIGIR REPOSITÓRIOS EOL
-# -------------------------
 CODENAME=$(lsb_release -cs 2>/dev/null || echo "unknown")
 info "Codename detectado: $CODENAME"
 
@@ -76,16 +67,10 @@ EOF
     ;;
 esac
 
-# -------------------------
-# APT UPDATE
-# -------------------------
 wait_for_apt
 info "Atualizando sistema..."
 apt-get update -y || error "Falha no apt update"
 
-# -------------------------
-# DEPENDÊNCIAS
-# -------------------------
 wait_for_apt
 info "Instalando dependências..."
 
@@ -102,11 +87,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   sqlite3 \
   curl || error "Falha ao instalar pacotes"
 
-# -------------------------
-# ESTRUTURA
-# -------------------------
 info "Criando estrutura..."
 
+rm -rf "$DASHBOARD_DIR/dashboard.py"
 mkdir -p "$DASHBOARD_DIR"
 
 touch "$LOG_FILE"
@@ -117,10 +100,12 @@ chmod 644 "$UFW_LOG"
 
 systemctl enable --now rsyslog >/dev/null 2>&1 || true
 
-# -------------------------
-# DOWNLOAD AGENTE
-# -------------------------
 info "Baixando agente..."
+
+TMP_AGENT="/tmp/edr_agent.py"
+
+rm -f "$TMP_AGENT"
+rm -f "$INSTALL_DIR/edr_agent.py"
 
 curl -fsSL \
   --connect-timeout 10 \
@@ -128,22 +113,25 @@ curl -fsSL \
   --retry 3 \
   --retry-delay 5 \
   "$AGENT_URL" \
-  -o "$INSTALL_DIR/edr_agent.py" || error "Erro ao baixar agente"
+  -o "$TMP_AGENT" || error "Erro ao baixar agente"
 
-if [ ! -s "$INSTALL_DIR/edr_agent.py" ]; then
+if [ ! -s "$TMP_AGENT" ]; then
   error "edr_agent.py veio vazio"
 fi
 
-if grep -q "404: Not Found" "$INSTALL_DIR/edr_agent.py"; then
+if grep -q "404: Not Found" "$TMP_AGENT"; then
   error "edr_agent.py inválido: 404"
 fi
 
+mv "$TMP_AGENT" "$INSTALL_DIR/edr_agent.py"
 chmod +x "$INSTALL_DIR/edr_agent.py"
 
-# -------------------------
-# DOWNLOAD DASHBOARD
-# -------------------------
 info "Baixando dashboard..."
+
+TMP_DASHBOARD="/tmp/edr_dashboard.py"
+
+rm -f "$TMP_DASHBOARD"
+rm -f "$DASHBOARD_DIR/dashboard.py"
 
 curl -fsSL \
   --connect-timeout 10 \
@@ -151,19 +139,19 @@ curl -fsSL \
   --retry 3 \
   --retry-delay 5 \
   "$DASHBOARD_URL" \
-  -o "$DASHBOARD_DIR/dashboard.py" || error "Erro ao baixar dashboard"
+  -o "$TMP_DASHBOARD" || error "Erro ao baixar dashboard"
 
-if [ ! -s "$DASHBOARD_DIR/dashboard.py" ]; then
+if [ ! -s "$TMP_DASHBOARD" ]; then
   error "dashboard.py veio vazio"
 fi
 
-if grep -q "404: Not Found" "$DASHBOARD_DIR/dashboard.py"; then
+if grep -q "404: Not Found" "$TMP_DASHBOARD"; then
   error "dashboard.py inválido: 404"
 fi
 
-# -------------------------
-# DATABASE
-# -------------------------
+mv "$TMP_DASHBOARD" "$DASHBOARD_DIR/dashboard.py"
+chmod 644 "$DASHBOARD_DIR/dashboard.py"
+
 info "Criando banco..."
 
 sqlite3 "$DB_FILE" <<EOF
@@ -177,9 +165,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 EOF
 
-# -------------------------
-# CONFIG
-# -------------------------
 info "Criando config..."
 
 cat > "$CONFIG_FILE" <<EOF
@@ -199,16 +184,10 @@ cat > "$CONFIG_FILE" <<EOF
 }
 EOF
 
-# -------------------------
-# VALIDAR PYTHON
-# -------------------------
 info "Validando agente..."
 
 python3 -m py_compile "$INSTALL_DIR/edr_agent.py" || error "Erro de sintaxe no agente"
 
-# -------------------------
-# VENV DASHBOARD
-# -------------------------
 info "Configurando dashboard..."
 
 python3 -m venv "$DASHBOARD_DIR/venv"
@@ -218,9 +197,6 @@ python3 -m venv "$DASHBOARD_DIR/venv"
   --retries 3 \
   flask || error "Erro ao instalar Flask"
 
-# -------------------------
-# SERVICE AGENTE
-# -------------------------
 info "Criando serviço do agente..."
 
 cat > /etc/systemd/system/edr-agent.service <<EOF
@@ -238,9 +214,6 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# -------------------------
-# SERVICE DASHBOARD
-# -------------------------
 info "Criando serviço do dashboard..."
 
 cat > /etc/systemd/system/edr-dashboard.service <<EOF
@@ -260,35 +233,23 @@ WorkingDirectory=$DASHBOARD_DIR
 WantedBy=multi-user.target
 EOF
 
-# -------------------------
-# FIREWALL BASE
-# -------------------------
 info "Configurando firewall base..."
 
 ufw --force enable
 ufw logging on
 ufw allow 5000/tcp
 
-# -------------------------
-# ATIVAR SERVIÇOS
-# -------------------------
 info "Ativando serviços..."
 
 systemctl daemon-reload
 systemctl enable edr-agent edr-dashboard
 systemctl restart edr-agent edr-dashboard
 
-# -------------------------
-# VALIDAÇÃO FINAL
-# -------------------------
 info "Validando instalação..."
 
 systemctl is-active --quiet edr-agent || error "edr-agent não está ativo"
 systemctl is-active --quiet edr-dashboard || error "edr-dashboard não está ativo"
 
-# -------------------------
-# FINAL
-# -------------------------
 info "Instalação concluída 🚀"
 
 echo ""
