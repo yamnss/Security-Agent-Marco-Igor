@@ -8,6 +8,7 @@ Torne-se usuário root
  -> nano /etc/apt/sources.lists
   -> cole os repositórios disponíveis no arquivo "source lists"
     -> sudo apt update 
+    -> sudo apt install curl -y
       -> bash <(curl -fsSL https://raw.githubusercontent.com/yamnss/Security-Agent-Marco-Igor/main/install.sh)
 
 
