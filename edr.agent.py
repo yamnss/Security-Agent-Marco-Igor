@@ -9,9 +9,6 @@ import sqlite3
 import subprocess
 from datetime import datetime
 
-# -------------------------
-# PATHS
-# -------------------------
 LOG_FILE = "/var/log/edr_agent.log"
 DB_FILE = "/opt/edr-agent/edr.db"
 CONFIG_FILE = "/opt/edr-agent/config.json"
@@ -19,9 +16,7 @@ CONFIG_FILE = "/opt/edr-agent/config.json"
 AUTH_LOG = "/var/log/auth.log"
 UFW_LOG = "/var/log/ufw.log"
 
-# -------------------------
-# LOAD CONFIG
-# -------------------------
+
 def load_config():
     default = {
         "blocked_ports": [23, 21, 80],
@@ -51,9 +46,6 @@ def load_config():
 
 CONFIG = load_config()
 
-# -------------------------
-# VARS
-# -------------------------
 CHECK_INTERVAL = CONFIG["check_interval"]
 
 BLOCKED_PORTS = CONFIG["blocked_ports"]
@@ -77,9 +69,7 @@ scan_attempts = {}
 blocked_ips = set()
 last_event_log = {}
 
-# -------------------------
-# LOG
-# -------------------------
+
 def ensure_runtime_files():
     try:
         os.makedirs("/opt/edr-agent", exist_ok=True)
@@ -153,9 +143,6 @@ def event_cooldown(key, level, msg, etype="GENERAL", ip=None, cooldown=None):
         last_event_log[key] = now
 
 
-# -------------------------
-# SAFE RUN
-# -------------------------
 def safe_run(cmd):
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
@@ -171,9 +158,6 @@ def safe_output(cmd):
         return ""
 
 
-# -------------------------
-# FIREWALL
-# -------------------------
 def configure_firewall():
     event("LOW", "Configurando firewall via config.json", "FIREWALL")
 
@@ -202,9 +186,6 @@ def configure_firewall():
         )
 
 
-# -------------------------
-# SSH CONFIG
-# -------------------------
 def ensure_sshd_option(content, key, value):
     pattern = re.compile(rf"^\s*#?\s*{re.escape(key)}\s+.*$", re.MULTILINE)
 
@@ -243,9 +224,6 @@ def configure_ssh():
         event("MEDIUM", f"Erro ao configurar SSH: {e}", "SSH_CONFIG_ERROR")
 
 
-# -------------------------
-# HELPERS
-# -------------------------
 def is_whitelisted(ip):
     return ip in WHITELIST
 
@@ -259,9 +237,6 @@ def ufw_rule_exists(ip, port=None):
     return ip in status and str(port) in status
 
 
-# -------------------------
-# BLOCK
-# -------------------------
 def block_ip(ip, reason, port=None):
     if is_whitelisted(ip):
         event("LOW", f"IP em whitelist, bloqueio ignorado: {ip}", "WHITELIST", ip)
@@ -285,9 +260,6 @@ def block_ip(ip, reason, port=None):
     event("HIGH", f"IP bloqueado {ip} motivo={reason}", "IP_BLOCK", ip)
 
 
-# -------------------------
-# PORT MONITOR
-# -------------------------
 def monitor_ports():
     try:
         connections = psutil.net_connections(kind="inet")
@@ -323,9 +295,6 @@ def monitor_ports():
         event("LOW", f"Erro em monitor_ports: {e}", "SYSTEM_ERROR")
 
 
-# -------------------------
-# SSH DETECT
-# -------------------------
 def detect_ssh():
     global last_auth_pos
 
@@ -395,9 +364,6 @@ def detect_ssh():
         event("LOW", f"Erro em detect_ssh: {e}", "SYSTEM_ERROR")
 
 
-# -------------------------
-# SCAN DETECT
-# -------------------------
 def detect_scan():
     global last_ufw_pos
 
@@ -452,9 +418,6 @@ def detect_scan():
         event("LOW", f"Erro em detect_scan: {e}", "SYSTEM_ERROR")
 
 
-# -------------------------
-# LOOP
-# -------------------------
 def main():
     ensure_runtime_files()
     event("LOW", "EDR iniciado", "SYSTEM")
@@ -466,9 +429,6 @@ def main():
         time.sleep(CHECK_INTERVAL)
 
 
-# -------------------------
-# START
-# -------------------------
 if __name__ == "__main__":
     ensure_runtime_files()
     configure_firewall()
