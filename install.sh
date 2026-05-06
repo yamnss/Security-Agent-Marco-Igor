@@ -12,6 +12,7 @@ INSTALL_DIR="/opt/edr-agent"
 DASHBOARD_DIR="$INSTALL_DIR/dashboard"
 
 LOG_FILE="/var/log/edr_agent.log"
+UFW_LOG="/var/log/ufw.log"
 DB_FILE="$INSTALL_DIR/edr.db"
 CONFIG_FILE="$INSTALL_DIR/config.json"
 
@@ -32,13 +33,26 @@ error() { echo -e "${RED}[ERRO]${NC} $1"; exit 1; }
 # -------------------------
 # APT LOCK
 # -------------------------
-info "Verificando travas do apt..."
-while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-   || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
-   || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-  warn "Aguardando apt/dpkg liberar..."
-  sleep 5
-done
+wait_for_apt() {
+  info "Verificando travas do apt/dpkg..."
+
+  local waited=0
+  local max_wait=600
+
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+     || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+     || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    warn "Aguardando apt/dpkg liberar..."
+    sleep 5
+    waited=$((waited + 5))
+
+    if [ "$waited" -ge "$max_wait" ]; then
+      error "apt/dpkg ficou travado por mais de $max_wait segundos. Verifique unattended-upgrades."
+    fi
+  done
+}
+
+wait_for_apt
 
 # -------------------------
 # CORRIGIR REPOSITÓRIOS EOL
@@ -64,20 +78,23 @@ esac
 # -------------------------
 # APT UPDATE
 # -------------------------
+wait_for_apt
 info "Atualizando sistema..."
 apt-get update -y || error "Falha no apt update"
 
 # -------------------------
 # DEPENDÊNCIAS
 # -------------------------
+wait_for_apt
 info "Instalando dependências..."
 
-apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 \
   python3-venv \
   python3-pip \
   python3-psutil \
   ufw \
+  rsyslog \
   conntrack \
   net-tools \
   openssh-server \
@@ -93,6 +110,11 @@ mkdir -p "$DASHBOARD_DIR"
 
 touch "$LOG_FILE"
 chmod 666 "$LOG_FILE"
+
+touch "$UFW_LOG"
+chmod 644 "$UFW_LOG"
+
+systemctl enable --now rsyslog >/dev/null 2>&1 || true
 
 # -------------------------
 # DOWNLOAD
@@ -207,6 +229,7 @@ EOF
 info "Configurando firewall base..."
 
 ufw --force enable
+ufw logging on
 ufw allow 5000/tcp
 
 # -------------------------
