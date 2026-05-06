@@ -42,6 +42,7 @@ wait_for_apt() {
   while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
      || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
      || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+
     warn "Aguardando apt/dpkg liberar..."
     sleep 5
     waited=$((waited + 5))
@@ -117,16 +118,48 @@ chmod 644 "$UFW_LOG"
 systemctl enable --now rsyslog >/dev/null 2>&1 || true
 
 # -------------------------
-# DOWNLOAD
+# DOWNLOAD AGENTE
 # -------------------------
 info "Baixando agente..."
 
-curl -fsSL "$AGENT_URL" -o "$INSTALL_DIR/edr_agent.py" || error "Erro ao baixar agente"
+curl -fsSL \
+  --connect-timeout 10 \
+  --max-time 60 \
+  --retry 3 \
+  --retry-delay 5 \
+  "$AGENT_URL" \
+  -o "$INSTALL_DIR/edr_agent.py" || error "Erro ao baixar agente"
+
+if [ ! -s "$INSTALL_DIR/edr_agent.py" ]; then
+  error "edr_agent.py veio vazio"
+fi
+
+if grep -q "404: Not Found" "$INSTALL_DIR/edr_agent.py"; then
+  error "edr_agent.py inválido: 404"
+fi
+
 chmod +x "$INSTALL_DIR/edr_agent.py"
 
+# -------------------------
+# DOWNLOAD DASHBOARD
+# -------------------------
 info "Baixando dashboard..."
 
-curl -fsSL "$DASHBOARD_URL" -o "$DASHBOARD_DIR/dashboard.py" || error "Erro ao baixar dashboard"
+curl -fsSL \
+  --connect-timeout 10 \
+  --max-time 60 \
+  --retry 3 \
+  --retry-delay 5 \
+  "$DASHBOARD_URL" \
+  -o "$DASHBOARD_DIR/dashboard.py" || error "Erro ao baixar dashboard"
+
+if [ ! -s "$DASHBOARD_DIR/dashboard.py" ]; then
+  error "dashboard.py veio vazio"
+fi
+
+if grep -q "404: Not Found" "$DASHBOARD_DIR/dashboard.py"; then
+  error "dashboard.py inválido: 404"
+fi
 
 # -------------------------
 # DATABASE
@@ -179,7 +212,11 @@ python3 -m py_compile "$INSTALL_DIR/edr_agent.py" || error "Erro de sintaxe no a
 info "Configurando dashboard..."
 
 python3 -m venv "$DASHBOARD_DIR/venv"
-"$DASHBOARD_DIR/venv/bin/pip" install flask
+
+"$DASHBOARD_DIR/venv/bin/pip" install \
+  --timeout 60 \
+  --retries 3 \
+  flask || error "Erro ao instalar Flask"
 
 # -------------------------
 # SERVICE AGENTE
@@ -240,6 +277,14 @@ info "Ativando serviços..."
 systemctl daemon-reload
 systemctl enable edr-agent edr-dashboard
 systemctl restart edr-agent edr-dashboard
+
+# -------------------------
+# VALIDAÇÃO FINAL
+# -------------------------
+info "Validando instalação..."
+
+systemctl is-active --quiet edr-agent || error "edr-agent não está ativo"
+systemctl is-active --quiet edr-dashboard || error "edr-dashboard não está ativo"
 
 # -------------------------
 # FINAL
