@@ -5,7 +5,7 @@ Após ter a máquina Ubuntu criada e estiver na interface faça os seguintes pas
 Rode o terminal
 Torne-se usuário root
 
- -> nano /etc/apt/sources.lists
+ -> nano /etc/apt/sources.list
   -> cole os repositórios disponíveis no arquivo "source lists"
     -> sudo apt update 
     -> sudo apt install curl -y
