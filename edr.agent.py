@@ -41,8 +41,8 @@ def load_config():
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                user = json.load(f)
-                default.update(user)
+                user_config = json.load(f)
+                default.update(user_config)
     except Exception as e:
         print(f"Erro ao carregar config: {e}")
 
@@ -80,7 +80,23 @@ last_event_log = {}
 # -------------------------
 # LOG
 # -------------------------
+def ensure_runtime_files():
+    try:
+        os.makedirs("/opt/edr-agent", exist_ok=True)
+
+        if not os.path.exists(LOG_FILE):
+            open(LOG_FILE, "a").close()
+
+        if not os.path.exists(UFW_LOG):
+            open(UFW_LOG, "a").close()
+
+    except Exception:
+        pass
+
+
 def log(msg):
+    ensure_runtime_files()
+
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
         f.flush()
@@ -161,6 +177,7 @@ def safe_output(cmd):
 def configure_firewall():
     event("LOW", "Configurando firewall via config.json", "FIREWALL")
 
+    safe_run(["systemctl", "enable", "--now", "rsyslog"])
     safe_run(["ufw", "--force", "enable"])
     safe_run(["ufw", "logging", "on"])
 
@@ -439,6 +456,7 @@ def detect_scan():
 # LOOP
 # -------------------------
 def main():
+    ensure_runtime_files()
     event("LOW", "EDR iniciado", "SYSTEM")
 
     while True:
@@ -452,6 +470,7 @@ def main():
 # START
 # -------------------------
 if __name__ == "__main__":
+    ensure_runtime_files()
     configure_firewall()
     configure_ssh()
     main()
